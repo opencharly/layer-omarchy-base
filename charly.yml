@@ -1,0 +1,21 @@
+#  opencharly/layer-omarchy-base — the Omarchy foundation layer.
+#
+#  SHAPE: one repo, one external pin, N member candies. Consumers pin ONLY the meta
+#  at its sub-path:
+#
+#      '@github.com/opencharly/layer-omarchy-base/candy/omarchy-base:v<CalVer>'
+#
+#  and the meta's `candy:` list names its siblings by BARE name;
+#  QualifyRemoteSiblingDeps rewrites those to .../candy/<member> at the SAME git tag.
+#  Members are never pinned from outside — they are always installed together.
+#
+#  Members live in candy/<name>/ subdirectories, NOT inline in this file. That is not
+#  a style choice: a candy's identity IS its directory. ParseCandyManifest returns the
+#  FIRST `candy:` node in a manifest and drops the rest, so three candies in one
+#  charly.yml collapse to one named after the directory, and the other two resolve as
+#  `unknown candy`. Verified directly before this repo was authored.
+version: 2026.240.1943
+repo: github.com/opencharly/layer-omarchy-base
+discover:
+    - path: candy
+      recursive: true
