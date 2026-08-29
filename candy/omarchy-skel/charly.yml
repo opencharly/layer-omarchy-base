@@ -1,0 +1,41 @@
+omarchy-skel:
+    candy:
+        version: 2026.242.0000
+        description: |
+            Seeds the image user's home from /etc/skel, which useradd already ran past.
+            omarchy-settings ships every Omarchy dotfile into /etc/skel, and on a real
+            Omarchy install those reach the user because the installer creates the account
+            AFTER the package is in place. A charly image is the other way round: the user
+            exists before any candy runs, so /etc/skel never fires and the home directory
+            would be empty of Hyprland, waybar, theme and shell configuration. This candy
+            closes that gap by copying the tree in explicitly. It installs no packages;
+            its whole observable effect is a populated home.
+        require:
+            - omarchy-runtime
+        plan:
+            - run: seed ${HOME} from /etc/skel
+              id: omarchy-skel-copy
+              context:
+                - build
+              run_as: "${USER}"
+              # -a preserves modes and symlinks; -f overwrites a placeholder a base image
+              # may already have dropped in (a stub .bashrc, say). The trailing `/.` copies
+              # the CONTENTS, including dotfiles, without nesting a `skel/` directory —
+              # `cp -a /etc/skel $HOME` would create $HOME/skel instead.
+              command: cp -af /etc/skel/. "${HOME}/"
+
+            - check: the Hyprland entry config landed in the user's home
+              id: omarchy-skel-hypr
+              context:
+                - build
+              file:
+                file: "${HOME}/.config/hypr/hyprland.lua"
+                exists: true
+
+            - check: the omarchy user configuration landed in the user's home
+              id: omarchy-skel-omarchy-config
+              context:
+                - build
+              file:
+                file: "${HOME}/.config/omarchy"
+                exists: true

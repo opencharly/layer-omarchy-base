@@ -1,0 +1,107 @@
+omarchy-runtime:
+    candy:
+        version: 2026.242.0000
+        description: |
+            The Omarchy runtime itself — the omarchy and omarchy-settings packages and the CLI tools they call.
+            omarchy-runtime installs the two packages that ARE Omarchy: `omarchy` ships
+            /usr/share/omarchy/{bin,shell,themes,default,install,migrations} and the
+            ~200 omarchy-* commands, and `omarchy-settings` ships all of /etc/skel plus
+            the system drop-ins and the limine/snapper/sddm/plymouth templates. Everything
+            else here is a tool those commands shell out to. Because both packages are
+            fully self-contained, charly vendors NO Omarchy configuration: there is no
+            copy of config/hypr/*.lua, no themes/ tree and no default/themed/*.tpl
+            anywhere in this repo. Verifiable on the built image: the package tree, the
+            omarchy commands, and a populated /etc/skel.
+        require:
+            # Ordering, not decoration: omarchy-repo must configure the mirror, the
+            # [omarchy] repository and the keyring BEFORE this candy's packages resolve.
+            # A candy's plan: steps run after its own distro: packages, which is exactly
+            # why the pacman configuration lives in a package-less sibling.
+            - omarchy-repo
+        distro:
+            arch:
+                package:
+                    # The two packages that are Omarchy. omarchy hard-depends on
+                    # omarchy-settings, limine, limine-mkinitcpio-hook,
+                    # limine-snapper-sync, snapper, hyprland, quickshell, uwsm, sddm,
+                    # xdg-desktop-portal-hyprland, wireplumber, pipewire, gnome-keyring,
+                    # gum, jq, git, perl, fakeroot, pacman-contrib and
+                    # ttf-jetbrains-mono-nerd-basic — so the boot/DM stack arrives here
+                    # whether a pod wants it or not. It is inert: omarchy-repo masks the
+                    # hooks and no unit is ever enabled.
+                    - omarchy
+                    - omarchy-settings
+                    # Tools the omarchy-* commands shell out to. Listed explicitly rather
+                    # than leaned on as transitive deps of `omarchy`, so a dependency
+                    # change upstream cannot silently remove one.
+                    - gum
+                    - jq
+                    - git
+                    - perl
+                    - fakeroot
+                    - pacman-contrib
+                    - expac
+                    - less
+                    - man-db
+                    - unzip
+                    - inetutils
+                    - whois
+                    - socat
+                    - inotify-tools
+                    - plocate
+                    - libsecret
+                    - gnome-keyring
+                    - libyaml
+                    - lua51
+                    - luarocks
+        plan:
+            - check: the omarchy package tree is installed
+              id: omarchy-runtime-tree
+              context:
+                - build
+              file:
+                file: /usr/share/omarchy/version
+                exists: true
+
+            - check: the Quickshell desktop-shell tree ships with the omarchy package
+              id: omarchy-runtime-shell-tree
+              context:
+                - build
+              file:
+                file: /usr/share/omarchy/shell
+                exists: true
+
+            - check: the bundled themes ship with the omarchy package
+              id: omarchy-runtime-themes
+              context:
+                - build
+              # A count comparison, not a stdout regex: `wc -l` output carries
+              # whitespace that anchored matching trips over, and the assertion here is
+              # "at least the shipped set", not an exact number that a new upstream theme
+              # would break.
+              exit_status: 0
+              command: sh -c 'test "$(ls -1 /usr/share/omarchy/themes | wc -l)" -ge 22'
+
+            - check: the omarchy CLI is on PATH
+              id: omarchy-runtime-cli
+              context:
+                - build
+              file:
+                file: /usr/bin/omarchy
+                exists: true
+
+            - check: omarchy-settings populated /etc/skel, the source omarchy-skel copies from
+              id: omarchy-runtime-skel-populated
+              context:
+                - build
+              file:
+                file: /etc/skel/.config/hypr/hyprland.lua
+                exists: true
+
+            - check: the themed templates that render a theme into app configs are present
+              id: omarchy-runtime-themed-templates
+              context:
+                - build
+              file:
+                file: /usr/share/omarchy/default/themed
+                exists: true

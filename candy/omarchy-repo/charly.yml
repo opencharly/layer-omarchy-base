@@ -1,0 +1,178 @@
+omarchy-repo:
+    candy:
+        version: 2026.242.0000
+        description: |
+            Points pacman at Omarchy's package sources and neutralises the boot hooks a container cannot satisfy.
+            omarchy-repo is the first thing every other Omarchy layer needs: it repoints
+            /etc/pacman.d/mirrorlist at Omarchy's own pinned Arch mirror snapshot, adds
+            the [omarchy] and [multilib] repositories, imports and locally signs the
+            Omarchy packaging key, and masks the four limine alpm hooks that cannot
+            succeed without a mounted ESP. It installs no packages of its own — that is
+            deliberate, because a candy's plan: steps are emitted AFTER its distro:
+            packages, so a candy that both configured pacman and installed from it would
+            configure too late. Members that install packages require: this one instead.
+            Verifiable on the built image: pacman resolves core/extra/multilib from an
+            omarchy.org host, the [omarchy] repo answers, the key is locally signed, and
+            the four hook masks are in place.
+        var:
+            # stable is upstream's own default for the release branch. edge and rc exist;
+            # there is no dev channel (pkgs.omarchy.org/dev and a mirrorlist-dev are both
+            # absent), so the case below has no dev arm on purpose.
+            OMARCHY_CHANNEL: stable
+        env_accept:
+            - name: OMARCHY_CHANNEL
+              description: "Omarchy package channel: stable (default), edge, or rc."
+        plan:
+            - run: repoint pacman at Omarchy's own Arch mirror snapshot and add [omarchy] + [multilib]
+              id: omarchy-repo-pacman-conf
+              context:
+                - build
+              # The mirror pin is NOT cosmetic. Omarchy publishes its own snapshot of the
+              # Arch repositories and installs against that, not against upstream Arch:
+              # measured 2026-08-29, stable-mirror.omarchy.org served linux 7.1.9.arch1-2
+              # while geo.mirror.pkgbuild.com was already on 7.1.11.arch1-1. 125 of the
+              # 148 base packages come from core/extra/multilib, so leaving the base
+              # image's Arch mirrorlist in place would produce a MIXED snapshot — worse
+              # than either pure one, and silently so.
+              #
+              # Channel -> mirror host is upstream's mapping (default/pacman/mirrorlist-*).
+              # Note edge uses the UNPREFIXED host; there is no edge-mirror.omarchy.org.
+              command: |
+                  set -eu
+                  case "${OMARCHY_CHANNEL}" in
+                    stable) mirror=stable-mirror.omarchy.org ;;
+                    edge)   mirror=mirror.omarchy.org ;;
+                    rc)     mirror=rc-mirror.omarchy.org ;;
+                    *) echo "unknown OMARCHY_CHANNEL=${OMARCHY_CHANNEL} (stable|edge|rc)" >&2; exit 1 ;;
+                  esac
+                  printf 'Server = https://%s/$repo/os/$arch\n' "$mirror" > /etc/pacman.d/mirrorlist
+                  # multilib is enabled by upstream's pacman.conf and is required by the
+                  # lib32-nvidia-* packages the GPU layer installs.
+                  grep -q '^\[multilib\]' /etc/pacman.conf || \
+                    printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+                  grep -q '^\[omarchy\]' /etc/pacman.conf || \
+                    printf '\n[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/%s/$arch\n' \
+                      "${OMARCHY_CHANNEL}" >> /etc/pacman.conf
+
+            - run: import and locally sign the Omarchy packaging key
+              id: omarchy-repo-keyring
+              context:
+                - build
+              # SigLevel on [omarchy] is `Optional TrustAll` upstream, so this is not
+              # strictly required to install — but without it the transaction relies on
+              # --noconfirm silently auto-accepting an `Import PGP key F0134EE680CAC571,
+              # "Unknown Packager"?` prompt. That is a trust decision, and it should be
+              # declared here rather than defaulted by a flag.
+              command: |
+                  set -eu
+                  pacman-key --init
+                  pacman-key --populate archlinux
+                  pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
+                  pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
+                  # -Syy, NOT -Sy. The base image ships a sync DB already populated from
+                  # UPSTREAM Arch, and Omarchy's mirror is a SNAPSHOT — its databases are
+                  # deliberately older. `pacman -Sy` compares freshness and keeps the
+                  # newer local DB, so the repoint above would silently have no effect:
+                  # pacman would resolve upstream Arch versions and then 404 fetching them
+                  # from the snapshot, which serves only its own. Observed exactly that:
+                  # the DB offered qt6-base 6.11.2-3 (upstream) while the mirror serves
+                  # 6.11.2-2. A forced refresh is the documented way to switch mirrors.
+                  pacman -Syy --noconfirm
+
+            - run: mask the four limine alpm hooks that need a mounted ESP
+              id: omarchy-repo-mask-limine-hooks
+              context:
+                - build
+              # The `omarchy` package hard-depends on limine, limine-mkinitcpio-hook,
+              # limine-snapper-sync, snapper and sddm, so a container installs the whole
+              # boot stack whether it wants it or not.
+              #
+              # Measured: `pacman -S --noconfirm --needed omarchy` EXITS 0 in a plain
+              # rootless container even unmasked — pacman treats a failed
+              # POST-TRANSACTION hook as non-fatal. So this is not needed for
+              # correctness. It is needed so that an EXPECTED
+              # `error: command failed to execute correctly` does not train everyone to
+              # ignore that line in build logs, which is exactly how a real failure gets
+              # missed.
+              #
+              # An /etc/pacman.d/hooks/<name> entry shadows the package-shipped
+              # /usr/share/libalpm/hooks/<name> of the same name — the mechanism
+              # distro-cachyos already uses for nvidia-ctk-cdi.hook.
+              #
+              # NOT masked: 90-mkinitcpio-install.hook. limine-mkinitcpio-hook OWNS
+              # /etc/pacman.d/hooks/90-mkinitcpio-install.hook, so pre-creating that path
+              # aborts the transaction with `failed to commit transaction (conflicting
+              # files)` — turning a cosmetic warning into a hard failure. Its one
+              # remaining non-fatal error is accepted; no ESP_PATH value can silence it,
+              # because limine-entry-tool requires a genuinely mounted FAT32 partition.
+              command: |
+                  set -eu
+                  mkdir -p /etc/pacman.d/hooks
+                  for h in 80-limine-efi-deploy.hook \
+                           10-limine-snapper-lock.hook \
+                           60-limine-mkinitcpio-remove-pre.hook \
+                           90-limine-mkinitcpio-remove-post.hook; do
+                    ln -sf /dev/null "/etc/pacman.d/hooks/$h"
+                  done
+
+            - check: pacman resolves core from an omarchy.org mirror, not from upstream Arch
+              id: omarchy-repo-core-mirror
+              context:
+                - build
+              stdout:
+                - contains: "omarchy.org"
+              command: pacman-conf --repo core Server
+
+            - check: the [omarchy] repository is configured and answers
+              id: omarchy-repo-omarchy-repo
+              context:
+                - build
+              stdout:
+                - contains: "pkgs.omarchy.org"
+              command: pacman-conf --repo omarchy Server
+
+            - check: the [multilib] repository is enabled (the lib32-nvidia-* packages need it)
+              id: omarchy-repo-multilib
+              context:
+                - build
+              exit_status: 0
+              command: pacman-conf --repo multilib Server
+
+            - check: the Omarchy packaging key is locally signed
+              id: omarchy-repo-key-lsigned
+              context:
+                - build
+              stdout:
+                - contains: "40DFB630FF42BCFFB047046CF0134EE680CAC571"
+              command: pacman-key --list-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
+
+            - check: the omarchy package resolves from the configured repositories
+              id: omarchy-repo-omarchy-resolvable
+              context:
+                - build
+              stdout:
+                - contains: "Repository      : omarchy"
+              command: pacman -Si omarchy
+
+            - check: all four limine alpm hook masks are in place
+              id: omarchy-repo-hook-masks
+              context:
+                - build
+              exit_status: 0
+              command: |
+                  set -eu
+                  for h in 80-limine-efi-deploy.hook \
+                           10-limine-snapper-lock.hook \
+                           60-limine-mkinitcpio-remove-pre.hook \
+                           90-limine-mkinitcpio-remove-post.hook; do
+                    [ -L "/etc/pacman.d/hooks/$h" ] || { echo "missing mask: $h" >&2; exit 1; }
+                  done
+
+            - check: 90-mkinitcpio-install.hook is NOT pre-masked (limine-mkinitcpio-hook owns that path)
+              id: omarchy-repo-no-mkinitcpio-mask
+              context:
+                - build
+              # A regression here does not warn — it aborts the whole transaction with
+              # `conflicting files`, so it is asserted rather than assumed.
+              exit_status: 0
+              command: test ! -L /etc/pacman.d/hooks/90-mkinitcpio-install.hook
