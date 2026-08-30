@@ -6,15 +6,18 @@ omarchy-repo:
             omarchy-repo is the first thing every other Omarchy layer needs: it repoints
             /etc/pacman.d/mirrorlist at Omarchy's own pinned Arch mirror snapshot, adds
             the [omarchy] and [multilib] repositories, imports and locally signs the
-            Omarchy packaging key, and stops the limine alpm hooks that cannot succeed
+            Omarchy packaging key, downgrades the base image's preinstalled packages onto
+            that snapshot so the image is Omarchy's version set rather than a mix of
+            Omarchy's and Arch's, and stops the limine alpm hooks that cannot succeed
             without a mounted ESP from ever being extracted. It installs no packages of
             its own — that is
             deliberate, because a candy's plan: steps are emitted AFTER its distro:
             packages, so a candy that both configured pacman and installed from it would
             configure too late. Members that install packages require: this one instead.
             Verifiable on the built image: pacman resolves core/extra/multilib from an
-            omarchy.org host, the [omarchy] repo answers, the key is locally signed, and
-            no limine alpm hook is present on the image.
+            omarchy.org host, the [omarchy] repo answers, the key is locally signed, no
+            installed package is newer than the snapshot serves, and no limine alpm hook
+            is present on the image.
         var:
             # stable is upstream's own default for the release branch. edge and rc exist;
             # there is no dev channel (pkgs.omarchy.org/dev and a mirrorlist-dev are both
@@ -48,10 +51,30 @@ omarchy-repo:
               # `Include = /etc/pacman.d/mirrorlist`, so the snapshot is pinned by the
               # file this candy writes rather than by one it would also have to maintain.
               #
-              # The five NoExtract rules keep the alpm hooks that drive limine-entry-tool
-              # off the image entirely — see the note on the next step.
+              # The five NoExtract rules this candy ADDS keep the alpm hooks that drive
+              # limine-entry-tool off the image entirely — see the note on the next step.
+              #
+              # The base image's OWN NoExtract rules are carried over verbatim rather than
+              # dropped. Writing the whole file is what makes this step idempotent, but it
+              # also discards whatever the base image had configured, and the Arch
+              # container image configures a lot: twelve NoExtract lines that keep man
+              # pages, info, GTK docs and non-English locales out of the image, plus
+              # `NoExtract = etc/pacman.conf etc/pacman.d/mirrorlist`, which is what stops
+              # a pacman upgrade from overwriting the very file this step just wrote.
+              # Losing them was measured, not theorised: the snapshot-alignment downgrade
+              # emitted 6607 `warning: could not get file information for usr/share/man/...`
+              # lines, because pacman was trying to back up files the base image had never
+              # extracted — and every package installed afterwards would have carried its
+              # full documentation and locale set into the image.
+              #
+              # They are READ from the live file rather than hardcoded, so this tracks the
+              # base image instead of pinning a copy of it that would silently go stale.
               command: |
                   set -eu
+                  # Capture before overwriting. `|| true` because a base image with no
+                  # NoExtract rules at all is legitimate — the [omarchy] rules below are
+                  # then the only ones, which is correct rather than an error.
+                  inherited=$(grep -E '^NoExtract' /etc/pacman.conf || true)
                   case "${OMARCHY_CHANNEL}" in
                     stable) mirror=stable-mirror.omarchy.org ;;
                     edge)   mirror=mirror.omarchy.org ;;
@@ -86,6 +109,7 @@ omarchy-repo:
                   NoExtract = usr/share/libalpm/hooks/60-limine-mkinitcpio-remove-pre.hook
                   NoExtract = usr/share/libalpm/hooks/90-limine-mkinitcpio-remove-post.hook
                   NoExtract = etc/pacman.d/hooks/90-mkinitcpio-install.hook
+                  ${inherited}
 
                   [core]
                   Server = https://${mirror}/\$repo/os/\$arch
@@ -126,6 +150,67 @@ omarchy-repo:
                   # 6.11.2-2. A forced refresh is the documented way to switch mirrors.
                   pacman -Syy --noconfirm
 
+            - run: align the base image's preinstalled packages with Omarchy's snapshot
+              id: omarchy-repo-snapshot-align
+              context:
+                - build
+              # Repointing the mirror is only HALF of pinning the snapshot. The Arch base
+              # image arrives with packages already installed at UPSTREAM versions, and
+              # pacman never downgrades on its own — so `-Syu --needed <pkgs>` leaves them
+              # ahead of the snapshot forever and the image becomes a MIXED set: newly
+              # installed packages at Omarchy's versions, preinstalled ones at Arch's.
+              # That is precisely the outcome the mirror pin exists to prevent, and it is
+              # silent apart from a `warning: X: local (a) is newer than core (b)` line.
+              #
+              # Measured on a built image before this step existed: openssl 3.6.4-1 vs the
+              # snapshot's 3.6.3-1, libksba 1.8.1-1 vs 1.8.0-1, libgcrypt 1.12.3-1 vs
+              # 1.12.2-1, libcap-ng 0.9.5-1 vs 0.9.3-1, ca-certificates-mozilla 3.128-1 vs
+              # 3.127-1.
+              #
+              # -Syuu (double u) is pacman's own downgrade-permitting sync. Measured
+              # RC=0 with all five downgraded cleanly.
+              #
+              # ORDERING IS LOAD-BEARING: this runs in omarchy-repo, BEFORE
+              # omarchy-runtime installs the `omarchy` package. That package ships a
+              # PRE-transaction hook which aborts any direct system upgrade with
+              # "Woah partner... This looks like a direct pacman system upgrade" unless
+              # OMARCHY_ALLOW_DIRECT_PACMAN=1 is set. Running the alignment here means the
+              # hook does not exist yet, so no escape hatch is needed and none is used.
+              # (That hook does NOT block targeted installs — verified `pacman -Syu
+              # --needed --noconfirm tree` exits 0 on an image with omarchy installed — so
+              # charly's normal package path is unaffected and needs no NoExtract entry.)
+              command: |
+                  set -eu
+                  pacman -Syuu --noconfirm
+
+            # WHY OMARCHY'S OWN UPDATE GUARD IS LEFT IN PLACE
+            #
+            # The `omarchy` package ships 00-omarchy-update-guard.hook, a PreTransaction
+            # hook with `Operation = Upgrade` / `Target = *` and `AbortOnFail`. It stops
+            # the transaction with "Woah partner... This looks like a direct pacman system
+            # upgrade" unless OMARCHY_ALLOW_DIRECT_PACMAN=1 is set.
+            #
+            # `Target = *` means it is not limited to a bare `pacman -Syu`: ANY
+            # transaction containing an upgrade of an already-installed package trips it,
+            # including the ordinary `pacman -Syu --needed <pkgs>` charly generates. That
+            # really does happen — a full GUI image build aborted after nine minutes on
+            # pod-selkies-core's `pacman -Syu --needed wl-clipboard … openssl` with
+            # `error: failed to commit transaction (failed to run transaction hooks)`.
+            #
+            # The first fix attempted here was to NoExtract the guard, next to the limine
+            # hooks. That was then TESTED rather than assumed, and the test says it is
+            # unnecessary: with the snapshot alignment above in place and the guard still
+            # present, the exact command that aborted the GUI build exits 0. The reason is
+            # that the guard triggers on UPGRADES, and after the alignment there are none
+            # left to perform — every installed package already sits at the snapshot's
+            # version. The alignment does not merely paper over the guard; it removes the
+            # condition the guard fires on.
+            #
+            # So the guard stays. Deleting an upstream safety hook needs a demonstrated
+            # need, and there is none: the measured failure has a measured fix that does
+            # not involve touching it. Fidelity to what Omarchy ships is the whole point
+            # of this layer, and that includes the parts that say no.
+            #
             # NOTE: there is no separate "mask the hooks" step. The five NoExtract
             # lines added above do the whole job, and they are strictly better than the
             # /etc/pacman.d/hooks/<name> -> /dev/null masking this candy used first:
@@ -208,11 +293,83 @@ omarchy-repo:
                   [ ! -e /etc/pacman.d/hooks/90-mkinitcpio-install.hook ] || {
                     echo "limine's /etc mkinitcpio hook was extracted" >&2; exit 1; }
 
+            - check: no installed package differs from what Omarchy's snapshot serves
+              id: omarchy-repo-snapshot-aligned
+              context:
+                - build
+              # The direct assertion that the image IS the snapshot rather than a mix.
+              #
+              # `pacman -Sl` annotates a package `[installed: <version>]` ONLY when the
+              # installed version differs from the repository's — so one command answers
+              # the whole question, for every package, in both directions (ahead or
+              # behind). Verified to discriminate rather than merely to pass: on a
+              # pre-alignment image the same command lists exactly the five drifted
+              # packages, and on an aligned image it lists none.
+              #
+              #   core ca-certificates-mozilla 3.127-1 [installed: 3.128-1]
+              #   core libcap-ng               0.9.3-1 [installed: 0.9.5-1]
+              #   core libgcrypt              1.12.2-1 [installed: 1.12.3-1]
+              #   core libksba                 1.8.0-1 [installed: 1.8.1-1]
+              #   core openssl                 3.6.3-1 [installed: 3.6.4-1]
+              #
+              # This replaced a `pacman -Q` loop calling `pacman -Si` per package, which
+              # was correct but spawned ~500 subprocesses and took over a minute of every
+              # build. It also carried a real bug worth recording: under `set -e`, a
+              # trailing `cond && cond && echo` chain returns non-zero for every correctly
+              # aligned package, which killed the command substitution's subshell and made
+              # the check report exit 1 with an EMPTY stderr. The bed caught it.
+              #
+              # No package is named: the drift set changes every time the Arch base image
+              # is rebuilt, so a hardcoded list would silently stop covering it.
+              exit_status: 0
+              command: |
+                  set -eu
+                  drift=$(pacman -Sl 2>/dev/null | grep 'installed:' || true)
+                  [ -z "$drift" ] || {
+                    echo "these packages differ from the Omarchy snapshot:" >&2
+                    echo "$drift" >&2
+                    exit 1; }
+
+            - check: Omarchy's own pacman update guard is still on the image
+              id: omarchy-repo-update-guard-intact
+              context:
+                - build
+              # The inverse of the limine check, and deliberately so. The limine hooks are
+              # removed because they cannot succeed in a container; this one is KEPT,
+              # because the snapshot alignment removes the condition it fires on rather
+              # than the hook itself. Asserting its presence is what stops a future change
+              # from quietly deleting an upstream safety mechanism on the grounds that it
+              # was once inconvenient.
+              exit_status: 0
+              command: |
+                  set -eu
+                  test -e /usr/share/libalpm/hooks/00-omarchy-update-guard.hook || {
+                    echo "the omarchy update guard is missing; this layer must not remove it" >&2
+                    exit 1; }
+
             - check: the NoExtract rules that keep those hooks off the image are configured
               id: omarchy-repo-noextract-configured
               context:
                 - build
-              # Asserted directly so a future edit that drops them fails here, with a clear
-              # message, rather than as a mystery error line in a much later build.
+              # Two families, asserted separately because they have different owners and
+              # different failure modes.
+              #
+              # The five limine rules are this candy's own; without them the hooks land
+              # and every build log carries errors.
+              #
+              # The inherited rules come from the base image, and the check is what stops
+              # a future edit from writing the file without carrying them over — which
+              # already happened once here and cost 6607 warnings plus every man page and
+              # locale in the image. `etc/pacman.conf` is called out by name because it is
+              # the one that protects this file from being clobbered by a pacman upgrade.
               exit_status: 0
-              command: sh -c 'test "$(grep -c "^NoExtract = " /etc/pacman.conf)" -eq 5'
+              command: |
+                  set -eu
+                  mine=$(grep -c '^NoExtract = usr/share/libalpm/hooks/\|^NoExtract = etc/pacman.d/hooks/' /etc/pacman.conf)
+                  [ "$mine" -eq 5 ] || { echo "expected 5 limine NoExtract rules, found $mine" >&2; exit 1; }
+                  grep -qE '^NoExtract.*usr/share/man' /etc/pacman.conf || {
+                    echo "the base image's man-page NoExtract rule was not carried over" >&2; exit 1; }
+                  grep -qE '^NoExtract.*etc/pacman\.conf' /etc/pacman.conf || {
+                    echo "the base image's etc/pacman.conf NoExtract rule was not carried over" >&2
+                    echo "without it a pacman upgrade can overwrite the file this candy writes" >&2
+                    exit 1; }
