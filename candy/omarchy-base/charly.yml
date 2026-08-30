@@ -40,7 +40,7 @@ omarchy-base-skill:
             Arch mirror snapshot, the omarchy/omarchy-settings runtime, and the /etc/skel
             seeding an image user needs.
             MUST be invoked when working with: the omarchy-base meta or any of its
-            members, Omarchy package sources, the limine alpm hook masks, or why an
+            members, Omarchy package sources, the limine alpm hook NoExtract rules, or why an
             Omarchy image installs a bootloader it never uses.
         content: |-
             # Candy: omarchy-base
@@ -96,27 +96,38 @@ omarchy-base-skill:
 
             The `omarchy` package hard-depends on `limine`, `limine-mkinitcpio-hook`,
             `limine-snapper-sync`, `snapper` and `sddm`. A container installs the whole
-            boot stack whether it wants it or not.
+            boot stack whether it wants it or not. It is inert — the alpm hooks that
+            would drive `limine-entry-tool` are never extracted, and no unit is enabled.
 
-            `pacman -S --noconfirm --needed omarchy` **exits 0 anyway**, masked or not:
-            pacman treats a failed post-transaction hook as non-fatal. The four masks
-            exist so an *expected* `error: command failed to execute correctly` does not
-            train everyone to ignore that line in build logs.
+            ## The hooks are NoExtract'd, not masked
 
-            Masked (an `/etc/pacman.d/hooks/<name>` entry shadows the package-shipped
-            `/usr/share/libalpm/hooks/<name>`):
+            `limine-entry-tool` requires a genuinely mounted FAT32 ESP, which a container
+            cannot have, so its hooks always fail there. `omarchy-repo` adds five
+            `NoExtract` rules to `/etc/pacman.conf` so the hook files never land:
 
-            - `80-limine-efi-deploy.hook`
-            - `10-limine-snapper-lock.hook`
-            - `60-limine-mkinitcpio-remove-pre.hook`
-            - `90-limine-mkinitcpio-remove-post.hook`
+            - `usr/share/libalpm/hooks/80-limine-efi-deploy.hook`
+            - `usr/share/libalpm/hooks/10-limine-snapper-lock.hook`
+            - `usr/share/libalpm/hooks/60-limine-mkinitcpio-remove-pre.hook`
+            - `usr/share/libalpm/hooks/90-limine-mkinitcpio-remove-post.hook`
+            - `etc/pacman.d/hooks/90-mkinitcpio-install.hook`
 
-            **Never mask `90-mkinitcpio-install.hook`.** `limine-mkinitcpio-hook` *owns*
-            `/etc/pacman.d/hooks/90-mkinitcpio-install.hook`, so pre-creating that path
-            aborts the transaction with `failed to commit transaction (conflicting files)`
-            — turning a cosmetic warning into a hard failure. Its one remaining non-fatal
-            error is accepted; no `ESP_PATH` value silences it, because `limine-entry-tool`
-            requires a genuinely mounted FAT32 partition.
+            **Do not use `/etc/pacman.d/hooks/<name>` masking here.** It was tried first
+            and is worse on three counts:
+
+            1. It cannot cover `90-mkinitcpio-install.hook` at all —
+               `limine-mkinitcpio-hook` *owns* that path, so pre-creating it aborts the
+               transaction with `failed to commit transaction (conflicting files)`.
+            2. It leaves one unmaskable failure behind. No `ESP_PATH` value silences it;
+               the tool insists on a real mounted FAT32 partition.
+            3. That leftover is not cosmetic. `charly check run` fails a build whose log
+               carries failure lines even when podman exits 0 — reported as
+               *"image-build exited 0 but its log carries N error line(s)"*. The R10 gate
+               is stricter than pacman, and correctly so.
+
+            `ENABLE_HOOKS` inside `limine-entry-tool` is set by invocation mode, not by
+            `/etc/limine-entry-tool.conf`, so there is no supported config switch to turn
+            the hooks off. `NoExtract` is pacman's own mechanism for exactly this, and it
+            yields a transaction that exits 0 with a completely clean log.
 
             ## charly vendors no Omarchy configuration
 

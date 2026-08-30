@@ -6,14 +6,15 @@ omarchy-repo:
             omarchy-repo is the first thing every other Omarchy layer needs: it repoints
             /etc/pacman.d/mirrorlist at Omarchy's own pinned Arch mirror snapshot, adds
             the [omarchy] and [multilib] repositories, imports and locally signs the
-            Omarchy packaging key, and masks the four limine alpm hooks that cannot
-            succeed without a mounted ESP. It installs no packages of its own — that is
+            Omarchy packaging key, and stops the limine alpm hooks that cannot succeed
+            without a mounted ESP from ever being extracted. It installs no packages of
+            its own — that is
             deliberate, because a candy's plan: steps are emitted AFTER its distro:
             packages, so a candy that both configured pacman and installed from it would
             configure too late. Members that install packages require: this one instead.
             Verifiable on the built image: pacman resolves core/extra/multilib from an
             omarchy.org host, the [omarchy] repo answers, the key is locally signed, and
-            the four hook masks are in place.
+            no limine alpm hook is present on the image.
         var:
             # stable is upstream's own default for the release branch. edge and rc exist;
             # there is no dev channel (pkgs.omarchy.org/dev and a mirrorlist-dev are both
@@ -23,7 +24,7 @@ omarchy-repo:
             - name: OMARCHY_CHANNEL
               description: "Omarchy package channel: stable (default), edge, or rc."
         plan:
-            - run: repoint pacman at Omarchy's own Arch mirror snapshot and add [omarchy] + [multilib]
+            - run: write a complete pacman.conf pinned to Omarchy's package sources
               id: omarchy-repo-pacman-conf
               context:
                 - build
@@ -35,8 +36,20 @@ omarchy-repo:
               # image's Arch mirrorlist in place would produce a MIXED snapshot — worse
               # than either pure one, and silently so.
               #
-              # Channel -> mirror host is upstream's mapping (default/pacman/mirrorlist-*).
-              # Note edge uses the UNPREFIXED host; there is no edge-mirror.omarchy.org.
+              # The whole file is WRITTEN, not appended to or sed-ed. Editing in place is
+              # not idempotent against a base image whose pacman.conf this candy does not
+              # own: an earlier version of this step inserted after /^\[options\]/ and
+              # produced DUPLICATE NoExtract blocks on an image that turned out to carry
+              # two [options] sections. Writing the file makes the result a function of
+              # this candy alone, and re-running it changes nothing.
+              #
+              # Modelled on upstream's own default/pacman/pacman-stable.conf, with the
+              # mirror INLINED per repository rather than via
+              # `Include = /etc/pacman.d/mirrorlist`, so the snapshot is pinned by the
+              # file this candy writes rather than by one it would also have to maintain.
+              #
+              # The five NoExtract rules keep the alpm hooks that drive limine-entry-tool
+              # off the image entirely — see the note on the next step.
               command: |
                   set -eu
                   case "${OMARCHY_CHANNEL}" in
@@ -45,14 +58,48 @@ omarchy-repo:
                     rc)     mirror=rc-mirror.omarchy.org ;;
                     *) echo "unknown OMARCHY_CHANNEL=${OMARCHY_CHANNEL} (stable|edge|rc)" >&2; exit 1 ;;
                   esac
-                  printf 'Server = https://%s/$repo/os/$arch\n' "$mirror" > /etc/pacman.d/mirrorlist
-                  # multilib is enabled by upstream's pacman.conf and is required by the
-                  # lib32-nvidia-* packages the GPU layer installs.
-                  grep -q '^\[multilib\]' /etc/pacman.conf || \
-                    printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
-                  grep -q '^\[omarchy\]' /etc/pacman.conf || \
-                    printf '\n[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/%s/$arch\n' \
-                      "${OMARCHY_CHANNEL}" >> /etc/pacman.conf
+                  cat > /etc/pacman.conf <<PACMANCONF
+                  [options]
+                  # Upstream's own [options] (default/pacman/pacman-stable.conf) with two
+                  # deliberate omissions:
+                  #
+                  #  - Color/ILoveCandy/VerbosePkgLists are cosmetic and only add escape
+                  #    codes to a build log.
+                  #  - DownloadUser = alpm is DROPPED, and this is not a style choice.
+                  #    It makes pacman drop privileges to the alpm user for downloads,
+                  #    but charly mounts /var/cache/pacman/pkg as a root-owned build
+                  #    cache, which alpm cannot write to. Measured: the whole transaction
+                  #    dies with "failed to synchronize all databases (failed to retrieve
+                  #    some files)". Upstream can use it because a real install writes to
+                  #    a normal directory; a cache-mounted build cannot.
+                  #
+                  # HoldPkg is kept — a cheap safety net against removing pacman or glibc.
+                  HoldPkg = pacman glibc
+                  Architecture = auto
+                  CheckSpace
+                  ParallelDownloads = 5
+                  SigLevel = Required DatabaseOptional
+                  LocalFileSigLevel = Optional
+
+                  NoExtract = usr/share/libalpm/hooks/80-limine-efi-deploy.hook
+                  NoExtract = usr/share/libalpm/hooks/10-limine-snapper-lock.hook
+                  NoExtract = usr/share/libalpm/hooks/60-limine-mkinitcpio-remove-pre.hook
+                  NoExtract = usr/share/libalpm/hooks/90-limine-mkinitcpio-remove-post.hook
+                  NoExtract = etc/pacman.d/hooks/90-mkinitcpio-install.hook
+
+                  [core]
+                  Server = https://${mirror}/\$repo/os/\$arch
+
+                  [extra]
+                  Server = https://${mirror}/\$repo/os/\$arch
+
+                  [multilib]
+                  Server = https://${mirror}/\$repo/os/\$arch
+
+                  [omarchy]
+                  SigLevel = Optional TrustAll
+                  Server = https://pkgs.omarchy.org/${OMARCHY_CHANNEL}/\$arch
+                  PACMANCONF
 
             - run: import and locally sign the Omarchy packaging key
               id: omarchy-repo-keyring
@@ -79,41 +126,32 @@ omarchy-repo:
                   # 6.11.2-2. A forced refresh is the documented way to switch mirrors.
                   pacman -Syy --noconfirm
 
-            - run: mask the four limine alpm hooks that need a mounted ESP
-              id: omarchy-repo-mask-limine-hooks
-              context:
-                - build
-              # The `omarchy` package hard-depends on limine, limine-mkinitcpio-hook,
-              # limine-snapper-sync, snapper and sddm, so a container installs the whole
-              # boot stack whether it wants it or not.
-              #
-              # Measured: `pacman -S --noconfirm --needed omarchy` EXITS 0 in a plain
-              # rootless container even unmasked — pacman treats a failed
-              # POST-TRANSACTION hook as non-fatal. So this is not needed for
-              # correctness. It is needed so that an EXPECTED
-              # `error: command failed to execute correctly` does not train everyone to
-              # ignore that line in build logs, which is exactly how a real failure gets
-              # missed.
-              #
-              # An /etc/pacman.d/hooks/<name> entry shadows the package-shipped
-              # /usr/share/libalpm/hooks/<name> of the same name — the mechanism
-              # distro-cachyos already uses for nvidia-ctk-cdi.hook.
-              #
-              # NOT masked: 90-mkinitcpio-install.hook. limine-mkinitcpio-hook OWNS
-              # /etc/pacman.d/hooks/90-mkinitcpio-install.hook, so pre-creating that path
-              # aborts the transaction with `failed to commit transaction (conflicting
-              # files)` — turning a cosmetic warning into a hard failure. Its one
-              # remaining non-fatal error is accepted; no ESP_PATH value can silence it,
-              # because limine-entry-tool requires a genuinely mounted FAT32 partition.
-              command: |
-                  set -eu
-                  mkdir -p /etc/pacman.d/hooks
-                  for h in 80-limine-efi-deploy.hook \
-                           10-limine-snapper-lock.hook \
-                           60-limine-mkinitcpio-remove-pre.hook \
-                           90-limine-mkinitcpio-remove-post.hook; do
-                    ln -sf /dev/null "/etc/pacman.d/hooks/$h"
-                  done
+            # NOTE: there is no separate "mask the hooks" step. The five NoExtract
+            # lines added above do the whole job, and they are strictly better than the
+            # /etc/pacman.d/hooks/<name> -> /dev/null masking this candy used first:
+            #
+            #  - Masking CANNOT cover 90-mkinitcpio-install.hook at all.
+            #    limine-mkinitcpio-hook OWNS /etc/pacman.d/hooks/90-mkinitcpio-install.hook,
+            #    so pre-creating that path aborts the transaction with
+            #    `failed to commit transaction (conflicting files)`. NoExtract simply
+            #    stops the file being written, with no conflict.
+            #
+            #  - Masking leaves ONE residual, unmaskable error: limine-entry-tool insists
+            #    on a genuinely mounted FAT32 partition, so no ESP_PATH value silences it
+            #    ("Boot path '/boot/efi' is not a mounted FAT32 boot partition"). That was
+            #    briefly accepted here as cosmetic — pacman treats a failed
+            #    post-transaction hook as non-fatal and the install exits 0 either way.
+            #    It is NOT cosmetic to charly: `charly check run` fails a build whose log
+            #    carries error lines even when podman exits 0
+            #    ("image-build exited 0 but its log carries 2 error line(s)"). The R10 gate
+            #    is right and the earlier judgement was wrong.
+            #
+            #  - ENABLE_HOOKS in limine-entry-tool is set by invocation mode, not by
+            #    /etc/limine-entry-tool.conf, so there is no supported config switch to
+            #    turn the hooks off. NoExtract is pacman's own mechanism for exactly this.
+            #
+            # Measured: with the five NoExtract lines, `pacman -S --needed omarchy` exits 0
+            # with ZERO error lines and no limine hook present anywhere on the image.
 
             - check: pacman resolves core from an omarchy.org mirror, not from upstream Arch
               id: omarchy-repo-core-mirror
@@ -154,25 +192,27 @@ omarchy-repo:
                 - contains: "Repository      : omarchy"
               command: pacman -Si omarchy
 
-            - check: all four limine alpm hook masks are in place
-              id: omarchy-repo-hook-masks
+            - check: no limine alpm hook was extracted onto the image
+              id: omarchy-repo-no-limine-hooks
               context:
                 - build
+              # The hooks drive limine-entry-tool, which requires a genuinely mounted
+              # FAT32 ESP and therefore always fails in a container. NoExtract keeps them
+              # off the image entirely, so nothing fails and no error line reaches the
+              # build log for charly's R10 gate to trip over.
               exit_status: 0
               command: |
                   set -eu
-                  for h in 80-limine-efi-deploy.hook \
-                           10-limine-snapper-lock.hook \
-                           60-limine-mkinitcpio-remove-pre.hook \
-                           90-limine-mkinitcpio-remove-post.hook; do
-                    [ -L "/etc/pacman.d/hooks/$h" ] || { echo "missing mask: $h" >&2; exit 1; }
-                  done
+                  found=$(ls /usr/share/libalpm/hooks/ 2>/dev/null | grep -i limine || true)
+                  [ -z "$found" ] || { echo "limine hooks were extracted: $found" >&2; exit 1; }
+                  [ ! -e /etc/pacman.d/hooks/90-mkinitcpio-install.hook ] || {
+                    echo "limine's /etc mkinitcpio hook was extracted" >&2; exit 1; }
 
-            - check: 90-mkinitcpio-install.hook is NOT pre-masked (limine-mkinitcpio-hook owns that path)
-              id: omarchy-repo-no-mkinitcpio-mask
+            - check: the NoExtract rules that keep those hooks off the image are configured
+              id: omarchy-repo-noextract-configured
               context:
                 - build
-              # A regression here does not warn — it aborts the whole transaction with
-              # `conflicting files`, so it is asserted rather than assumed.
+              # Asserted directly so a future edit that drops them fails here, with a clear
+              # message, rather than as a mystery error line in a much later build.
               exit_status: 0
-              command: test ! -L /etc/pacman.d/hooks/90-mkinitcpio-install.hook
+              command: sh -c 'test "$(grep -c "^NoExtract = " /etc/pacman.conf)" -eq 5'
