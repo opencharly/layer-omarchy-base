@@ -293,40 +293,42 @@ omarchy-repo:
                   [ ! -e /etc/pacman.d/hooks/90-mkinitcpio-install.hook ] || {
                     echo "limine's /etc mkinitcpio hook was extracted" >&2; exit 1; }
 
-            - check: no installed package is newer than what Omarchy's snapshot serves
+            - check: no installed package differs from what Omarchy's snapshot serves
               id: omarchy-repo-snapshot-aligned
               context:
                 - build
-              # The direct assertion that the image IS the snapshot rather than a mix:
-              # for every installed package the configured repositories also carry, the
-              # installed version must not be NEWER than the repository's.
+              # The direct assertion that the image IS the snapshot rather than a mix.
               #
-              # Compared with vercmp rather than by scraping pacman's
-              # `warning: X: local (a) is newer than core (b)` line, because that warning
-              # is only emitted during a transaction that has work to do — after the
-              # alignment there is none, so on a correct image the grep would find nothing
-              # and the check would pass for the WRONG reason. Verified both ways against
-              # a pre-alignment image: `pacman -Sup` and `pacman -Su --print` each
-              # reported 0, while this loop correctly found all five drifted packages.
+              # `pacman -Sl` annotates a package `[installed: <version>]` ONLY when the
+              # installed version differs from the repository's — so one command answers
+              # the whole question, for every package, in both directions (ahead or
+              # behind). Verified to discriminate rather than merely to pass: on a
+              # pre-alignment image the same command lists exactly the five drifted
+              # packages, and on an aligned image it lists none.
+              #
+              #   core ca-certificates-mozilla 3.127-1 [installed: 3.128-1]
+              #   core libcap-ng               0.9.3-1 [installed: 0.9.5-1]
+              #   core libgcrypt              1.12.2-1 [installed: 1.12.3-1]
+              #   core libksba                 1.8.0-1 [installed: 1.8.1-1]
+              #   core openssl                 3.6.3-1 [installed: 3.6.4-1]
+              #
+              # This replaced a `pacman -Q` loop calling `pacman -Si` per package, which
+              # was correct but spawned ~500 subprocesses and took over a minute of every
+              # build. It also carried a real bug worth recording: under `set -e`, a
+              # trailing `cond && cond && echo` chain returns non-zero for every correctly
+              # aligned package, which killed the command substitution's subshell and made
+              # the check report exit 1 with an EMPTY stderr. The bed caught it.
               #
               # No package is named: the drift set changes every time the Arch base image
               # is rebuilt, so a hardcoded list would silently stop covering it.
-              #
-              # The loop body uses `if`, NOT a trailing `cond && cond && echo` chain. Under
-              # `set -e` such a chain returns non-zero on every package that is correctly
-              # aligned — which is all of them — killing the command substitution's
-              # subshell and failing the assignment, so the check reported exit 1 with an
-              # EMPTY stderr and looked like a real drift. Measured; the bed caught it.
               exit_status: 0
               command: |
                   set -eu
-                  drift=$(pacman -Q | while read -r pkg ver; do
-                    rv=$(pacman -Si "$pkg" 2>/dev/null | awk '/^Version/{print $3; exit}') || true
-                    if [ -n "$rv" ] && [ "$(vercmp "$ver" "$rv")" -gt 0 ]; then
-                      echo "$pkg local=$ver snapshot=$rv"
-                    fi
-                  done)
-                  [ -z "$drift" ] || { echo "ahead of the Omarchy snapshot:" >&2; echo "$drift" >&2; exit 1; }
+                  drift=$(pacman -Sl 2>/dev/null | grep 'installed:' || true)
+                  [ -z "$drift" ] || {
+                    echo "these packages differ from the Omarchy snapshot:" >&2
+                    echo "$drift" >&2
+                    exit 1; }
 
             - check: Omarchy's own pacman update guard is still on the image
               id: omarchy-repo-update-guard-intact
