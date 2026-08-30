@@ -22,18 +22,19 @@ jobs:
 
       - name: Fetch the pinned charly source (CI-time temp checkout)
         run: |
-          git clone --depth 1 --branch v2026.240.2035 https://github.com/opencharly/charly.git /tmp/charly
+          mkdir -p .ci
+          git clone --depth 1 --branch v2026.241.1535 https://github.com/opencharly/charly.git .ci/charly
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: /tmp/charly/charly/go.mod
-          cache-dependency-path: /tmp/charly/charly/go.sum
+          go-version-file: .ci/charly/charly/go.mod
+          cache-dependency-path: .ci/charly/charly/go.sum
 
       - name: Build the charly binary from the pinned checkout
         run: |
-          mkdir -p /tmp/charly/bin
-          cd /tmp/charly/charly && go build -buildvcs=false -ldflags "-X main.BuildCalVer=candy-ci" -o /tmp/charly/bin/charly .
+          mkdir -p .ci/charly/bin
+          cd .ci/charly/charly && go build -buildvcs=false -ldflags "-X main.BuildCalVer=candy-ci" -o ../bin/charly .
 
       - name: The candy manifest validates at the pinned charly
         run: |
-          /tmp/charly/bin/charly box validate
+          .ci/charly/bin/charly box validate
