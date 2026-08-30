@@ -23,7 +23,7 @@ together.
 
 | Member | Installs | Effect |
 |---|---|---|
-| `omarchy-repo` | nothing | Repoints the mirror, adds `[omarchy]` + `[multilib]`, imports the key, masks the limine hooks |
+| `omarchy-repo` | nothing | Repoints the mirror, adds `[omarchy]` + `[multilib]`, imports the key, keeps the limine hooks off the image |
 | `omarchy-runtime` | `omarchy`, `omarchy-settings` + the CLI tools they call | The Omarchy package tree and the ~200 `omarchy-*` commands |
 | `omarchy-skel` | nothing | Copies `/etc/skel` into the image user's home |
 
@@ -65,17 +65,32 @@ no `dev` channel):
 
 **An Omarchy image installs a bootloader it never uses.** `omarchy` hard-depends on
 `limine`, `limine-mkinitcpio-hook`, `limine-snapper-sync`, `snapper` and `sddm`, so a
-container gets the whole boot stack regardless. It is inert — the hooks are masked and no
-unit is ever enabled.
+container gets the whole boot stack regardless. It is inert: the alpm hooks that would
+drive `limine-entry-tool` never land, and no unit is ever enabled.
 
-`pacman -S --noconfirm --needed omarchy` **exits 0 anyway**, masked or not: pacman treats
-a failed post-transaction hook as non-fatal. The four masks exist so an *expected*
-`error: command failed to execute correctly` does not train everyone to ignore that line
-in build logs.
+`limine-entry-tool` requires a genuinely mounted FAT32 ESP, which a container cannot
+have. `omarchy-repo` therefore adds five `NoExtract` rules to `/etc/pacman.conf` so the
+hook files are never written:
 
-**Never mask `90-mkinitcpio-install.hook`** — `limine-mkinitcpio-hook` *owns*
-`/etc/pacman.d/hooks/90-mkinitcpio-install.hook`, so pre-creating it aborts the
-transaction with `failed to commit transaction (conflicting files)`.
+```
+NoExtract = usr/share/libalpm/hooks/80-limine-efi-deploy.hook
+NoExtract = usr/share/libalpm/hooks/10-limine-snapper-lock.hook
+NoExtract = usr/share/libalpm/hooks/60-limine-mkinitcpio-remove-pre.hook
+NoExtract = usr/share/libalpm/hooks/90-limine-mkinitcpio-remove-post.hook
+NoExtract = etc/pacman.d/hooks/90-mkinitcpio-install.hook
+```
+
+**Do not use `/etc/pacman.d/hooks/<name>` masking here.** It was tried first and is worse
+on three counts: it cannot cover `90-mkinitcpio-install.hook` at all (the package *owns*
+that path, so pre-creating it aborts the transaction with `conflicting files`); it leaves
+one unsilenceable failure behind, since no `ESP_PATH` value satisfies the FAT32 check; and
+that leftover is not cosmetic, because `charly check run` fails a build whose log carries
+failure lines even when podman exits 0.
+
+`ENABLE_HOOKS` inside `limine-entry-tool` is set by invocation mode, not by
+`/etc/limine-entry-tool.conf`, so there is no supported config switch. `NoExtract` is
+pacman's own mechanism for exactly this, and it yields a transaction that exits 0 with a
+completely clean log.
 
 ## charly vendors no Omarchy configuration
 
