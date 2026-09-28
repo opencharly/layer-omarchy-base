@@ -1,6 +1,5 @@
 omarchy-repo:
     candy:
-        version: 2026.242.0000
         description: |
             Points pacman at Omarchy's package sources and neutralises the boot hooks a container cannot satisfy.
             omarchy-repo is the first thing every other Omarchy layer needs: it repoints
