@@ -1,6 +1,5 @@
 omarchy-base:
     candy:
-        version: 2026.242.0000
         description: |
             The Omarchy foundation — package sources, the Omarchy runtime, and a seeded home.
             omarchy-base is the meta every other Omarchy layer composes. It installs
