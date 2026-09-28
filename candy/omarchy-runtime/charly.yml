@@ -1,6 +1,5 @@
 omarchy-runtime:
     candy:
-        version: 2026.242.0000
         description: |
             The Omarchy runtime itself — the omarchy and omarchy-settings packages and the CLI tools they call.
             omarchy-runtime installs the two packages that ARE Omarchy: `omarchy` ships
