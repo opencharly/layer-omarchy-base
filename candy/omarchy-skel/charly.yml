@@ -1,6 +1,5 @@
 omarchy-skel:
     candy:
-        version: 2026.242.0000
         description: |
             Seeds the image user's home from /etc/skel, which useradd already ran past.
             omarchy-settings ships every Omarchy dotfile into /etc/skel, and on a real
