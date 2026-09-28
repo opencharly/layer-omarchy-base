@@ -1,6 +1,5 @@
 omarchy-repo:
     candy:
-        version: 2026.242.0000
         description: |
             Points pacman at Omarchy's package sources and neutralises the boot hooks a container cannot satisfy.
             omarchy-repo is the first thing every other Omarchy layer needs: it repoints
@@ -70,61 +69,60 @@ omarchy-repo:
               # They are READ from the live file rather than hardcoded, so this tracks the
               # base image instead of pinning a copy of it that would silently go stale.
               command: |
-                  set -eu
-                  # Capture before overwriting. `|| true` because a base image with no
-                  # NoExtract rules at all is legitimate — the [omarchy] rules below are
-                  # then the only ones, which is correct rather than an error.
-                  inherited=$(grep -E '^NoExtract' /etc/pacman.conf || true)
-                  case "${OMARCHY_CHANNEL}" in
-                    stable) mirror=stable-mirror.omarchy.org ;;
-                    edge)   mirror=mirror.omarchy.org ;;
-                    rc)     mirror=rc-mirror.omarchy.org ;;
-                    *) echo "unknown OMARCHY_CHANNEL=${OMARCHY_CHANNEL} (stable|edge|rc)" >&2; exit 1 ;;
-                  esac
-                  cat > /etc/pacman.conf <<PACMANCONF
-                  [options]
-                  # Upstream's own [options] (default/pacman/pacman-stable.conf) with two
-                  # deliberate omissions:
-                  #
-                  #  - Color/ILoveCandy/VerbosePkgLists are cosmetic and only add escape
-                  #    codes to a build log.
-                  #  - DownloadUser = alpm is DROPPED, and this is not a style choice.
-                  #    It makes pacman drop privileges to the alpm user for downloads,
-                  #    but charly mounts /var/cache/pacman/pkg as a root-owned build
-                  #    cache, which alpm cannot write to. Measured: the whole transaction
-                  #    dies with "failed to synchronize all databases (failed to retrieve
-                  #    some files)". Upstream can use it because a real install writes to
-                  #    a normal directory; a cache-mounted build cannot.
-                  #
-                  # HoldPkg is kept — a cheap safety net against removing pacman or glibc.
-                  HoldPkg = pacman glibc
-                  Architecture = auto
-                  CheckSpace
-                  ParallelDownloads = 5
-                  SigLevel = Required DatabaseOptional
-                  LocalFileSigLevel = Optional
+                set -eu
+                # Capture before overwriting. `|| true` because a base image with no
+                # NoExtract rules at all is legitimate — the [omarchy] rules below are
+                # then the only ones, which is correct rather than an error.
+                inherited=$(grep -E '^NoExtract' /etc/pacman.conf || true)
+                case "${OMARCHY_CHANNEL}" in
+                  stable) mirror=stable-mirror.omarchy.org ;;
+                  edge)   mirror=mirror.omarchy.org ;;
+                  rc)     mirror=rc-mirror.omarchy.org ;;
+                  *) echo "unknown OMARCHY_CHANNEL=${OMARCHY_CHANNEL} (stable|edge|rc)" >&2; exit 1 ;;
+                esac
+                cat > /etc/pacman.conf <<PACMANCONF
+                [options]
+                # Upstream's own [options] (default/pacman/pacman-stable.conf) with two
+                # deliberate omissions:
+                #
+                #  - Color/ILoveCandy/VerbosePkgLists are cosmetic and only add escape
+                #    codes to a build log.
+                #  - DownloadUser = alpm is DROPPED, and this is not a style choice.
+                #    It makes pacman drop privileges to the alpm user for downloads,
+                #    but charly mounts /var/cache/pacman/pkg as a root-owned build
+                #    cache, which alpm cannot write to. Measured: the whole transaction
+                #    dies with "failed to synchronize all databases (failed to retrieve
+                #    some files)". Upstream can use it because a real install writes to
+                #    a normal directory; a cache-mounted build cannot.
+                #
+                # HoldPkg is kept — a cheap safety net against removing pacman or glibc.
+                HoldPkg = pacman glibc
+                Architecture = auto
+                CheckSpace
+                ParallelDownloads = 5
+                SigLevel = Required DatabaseOptional
+                LocalFileSigLevel = Optional
 
-                  NoExtract = usr/share/libalpm/hooks/80-limine-efi-deploy.hook
-                  NoExtract = usr/share/libalpm/hooks/10-limine-snapper-lock.hook
-                  NoExtract = usr/share/libalpm/hooks/60-limine-mkinitcpio-remove-pre.hook
-                  NoExtract = usr/share/libalpm/hooks/90-limine-mkinitcpio-remove-post.hook
-                  NoExtract = etc/pacman.d/hooks/90-mkinitcpio-install.hook
-                  ${inherited}
+                NoExtract = usr/share/libalpm/hooks/80-limine-efi-deploy.hook
+                NoExtract = usr/share/libalpm/hooks/10-limine-snapper-lock.hook
+                NoExtract = usr/share/libalpm/hooks/60-limine-mkinitcpio-remove-pre.hook
+                NoExtract = usr/share/libalpm/hooks/90-limine-mkinitcpio-remove-post.hook
+                NoExtract = etc/pacman.d/hooks/90-mkinitcpio-install.hook
+                ${inherited}
 
-                  [core]
-                  Server = https://${mirror}/\$repo/os/\$arch
+                [core]
+                Server = https://${mirror}/\$repo/os/\$arch
 
-                  [extra]
-                  Server = https://${mirror}/\$repo/os/\$arch
+                [extra]
+                Server = https://${mirror}/\$repo/os/\$arch
 
-                  [multilib]
-                  Server = https://${mirror}/\$repo/os/\$arch
+                [multilib]
+                Server = https://${mirror}/\$repo/os/\$arch
 
-                  [omarchy]
-                  SigLevel = Optional TrustAll
-                  Server = https://pkgs.omarchy.org/${OMARCHY_CHANNEL}/\$arch
-                  PACMANCONF
-
+                [omarchy]
+                SigLevel = Optional TrustAll
+                Server = https://pkgs.omarchy.org/${OMARCHY_CHANNEL}/\$arch
+                PACMANCONF
             - run: import and locally sign the Omarchy packaging key
               id: omarchy-repo-keyring
               context:
@@ -135,21 +133,20 @@ omarchy-repo:
               # "Unknown Packager"?` prompt. That is a trust decision, and it should be
               # declared here rather than defaulted by a flag.
               command: |
-                  set -eu
-                  pacman-key --init
-                  pacman-key --populate archlinux
-                  pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
-                  pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
-                  # -Syy, NOT -Sy. The base image ships a sync DB already populated from
-                  # UPSTREAM Arch, and Omarchy's mirror is a SNAPSHOT — its databases are
-                  # deliberately older. `pacman -Sy` compares freshness and keeps the
-                  # newer local DB, so the repoint above would silently have no effect:
-                  # pacman would resolve upstream Arch versions and then 404 fetching them
-                  # from the snapshot, which serves only its own. Observed exactly that:
-                  # the DB offered qt6-base 6.11.2-3 (upstream) while the mirror serves
-                  # 6.11.2-2. A forced refresh is the documented way to switch mirrors.
-                  pacman -Syy --noconfirm
-
+                set -eu
+                pacman-key --init
+                pacman-key --populate archlinux
+                pacman-key --recv-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
+                pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
+                # -Syy, NOT -Sy. The base image ships a sync DB already populated from
+                # UPSTREAM Arch, and Omarchy's mirror is a SNAPSHOT — its databases are
+                # deliberately older. `pacman -Sy` compares freshness and keeps the
+                # newer local DB, so the repoint above would silently have no effect:
+                # pacman would resolve upstream Arch versions and then 404 fetching them
+                # from the snapshot, which serves only its own. Observed exactly that:
+                # the DB offered qt6-base 6.11.2-3 (upstream) while the mirror serves
+                # 6.11.2-2. A forced refresh is the documented way to switch mirrors.
+                pacman -Syy --noconfirm
             - run: align the base image's preinstalled packages with Omarchy's snapshot
               id: omarchy-repo-snapshot-align
               context:
@@ -180,9 +177,8 @@ omarchy-repo:
               # --needed --noconfirm tree` exits 0 on an image with omarchy installed — so
               # charly's normal package path is unaffected and needs no NoExtract entry.)
               command: |
-                  set -eu
-                  pacman -Syuu --noconfirm
-
+                set -eu
+                pacman -Syuu --noconfirm
             # WHY OMARCHY'S OWN UPDATE GUARD IS LEFT IN PLACE
             #
             # The `omarchy` package ships 00-omarchy-update-guard.hook, a PreTransaction
@@ -237,7 +233,6 @@ omarchy-repo:
             #
             # Measured: with the five NoExtract lines, `pacman -S --needed omarchy` exits 0
             # with ZERO error lines and no limine hook present anywhere on the image.
-
             - check: pacman resolves core from an omarchy.org mirror, not from upstream Arch
               id: omarchy-repo-core-mirror
               context:
@@ -245,7 +240,6 @@ omarchy-repo:
               stdout:
                 - contains: "omarchy.org"
               command: pacman-conf --repo core Server
-
             - check: the [omarchy] repository is configured and answers
               id: omarchy-repo-omarchy-repo
               context:
@@ -253,14 +247,12 @@ omarchy-repo:
               stdout:
                 - contains: "pkgs.omarchy.org"
               command: pacman-conf --repo omarchy Server
-
             - check: the [multilib] repository is enabled (the lib32-nvidia-* packages need it)
               id: omarchy-repo-multilib
               context:
                 - build
               exit_status: 0
               command: pacman-conf --repo multilib Server
-
             - check: the Omarchy packaging key is locally signed
               id: omarchy-repo-key-lsigned
               context:
@@ -268,7 +260,6 @@ omarchy-repo:
               stdout:
                 - contains: "40DFB630FF42BCFFB047046CF0134EE680CAC571"
               command: pacman-key --list-keys 40DFB630FF42BCFFB047046CF0134EE680CAC571
-
             - check: the omarchy package resolves from the configured repositories
               id: omarchy-repo-omarchy-resolvable
               context:
@@ -276,7 +267,6 @@ omarchy-repo:
               stdout:
                 - contains: "Repository      : omarchy"
               command: pacman -Si omarchy
-
             - check: no limine alpm hook was extracted onto the image
               id: omarchy-repo-no-limine-hooks
               context:
@@ -287,12 +277,11 @@ omarchy-repo:
               # build log for charly's R10 gate to trip over.
               exit_status: 0
               command: |
-                  set -eu
-                  found=$(ls /usr/share/libalpm/hooks/ 2>/dev/null | grep -i limine || true)
-                  [ -z "$found" ] || { echo "limine hooks were extracted: $found" >&2; exit 1; }
-                  [ ! -e /etc/pacman.d/hooks/90-mkinitcpio-install.hook ] || {
-                    echo "limine's /etc mkinitcpio hook was extracted" >&2; exit 1; }
-
+                set -eu
+                found=$(ls /usr/share/libalpm/hooks/ 2>/dev/null | grep -i limine || true)
+                [ -z "$found" ] || { echo "limine hooks were extracted: $found" >&2; exit 1; }
+                [ ! -e /etc/pacman.d/hooks/90-mkinitcpio-install.hook ] || {
+                  echo "limine's /etc mkinitcpio hook was extracted" >&2; exit 1; }
             - check: no installed package differs from what Omarchy's snapshot serves
               id: omarchy-repo-snapshot-aligned
               context:
@@ -323,13 +312,12 @@ omarchy-repo:
               # is rebuilt, so a hardcoded list would silently stop covering it.
               exit_status: 0
               command: |
-                  set -eu
-                  drift=$(pacman -Sl 2>/dev/null | grep 'installed:' || true)
-                  [ -z "$drift" ] || {
-                    echo "these packages differ from the Omarchy snapshot:" >&2
-                    echo "$drift" >&2
-                    exit 1; }
-
+                set -eu
+                drift=$(pacman -Sl 2>/dev/null | grep 'installed:' || true)
+                [ -z "$drift" ] || {
+                  echo "these packages differ from the Omarchy snapshot:" >&2
+                  echo "$drift" >&2
+                  exit 1; }
             - check: Omarchy's own pacman update guard is still on the image
               id: omarchy-repo-update-guard-intact
               context:
@@ -342,11 +330,10 @@ omarchy-repo:
               # was once inconvenient.
               exit_status: 0
               command: |
-                  set -eu
-                  test -e /usr/share/libalpm/hooks/00-omarchy-update-guard.hook || {
-                    echo "the omarchy update guard is missing; this layer must not remove it" >&2
-                    exit 1; }
-
+                set -eu
+                test -e /usr/share/libalpm/hooks/00-omarchy-update-guard.hook || {
+                  echo "the omarchy update guard is missing; this layer must not remove it" >&2
+                  exit 1; }
             - check: the NoExtract rules that keep those hooks off the image are configured
               id: omarchy-repo-noextract-configured
               context:
@@ -363,13 +350,13 @@ omarchy-repo:
               # locale in the image. `etc/pacman.conf` is called out by name because it is
               # the one that protects this file from being clobbered by a pacman upgrade.
               exit_status: 0
-              command: |
-                  set -eu
-                  mine=$(grep -c '^NoExtract = usr/share/libalpm/hooks/\|^NoExtract = etc/pacman.d/hooks/' /etc/pacman.conf)
-                  [ "$mine" -eq 5 ] || { echo "expected 5 limine NoExtract rules, found $mine" >&2; exit 1; }
-                  grep -qE '^NoExtract.*usr/share/man' /etc/pacman.conf || {
-                    echo "the base image's man-page NoExtract rule was not carried over" >&2; exit 1; }
-                  grep -qE '^NoExtract.*etc/pacman\.conf' /etc/pacman.conf || {
-                    echo "the base image's etc/pacman.conf NoExtract rule was not carried over" >&2
-                    echo "without it a pacman upgrade can overwrite the file this candy writes" >&2
-                    exit 1; }
+              command: |-
+                set -eu
+                mine=$(grep -c '^NoExtract = usr/share/libalpm/hooks/\|^NoExtract = etc/pacman.d/hooks/' /etc/pacman.conf)
+                [ "$mine" -eq 5 ] || { echo "expected 5 limine NoExtract rules, found $mine" >&2; exit 1; }
+                grep -qE '^NoExtract.*usr/share/man' /etc/pacman.conf || {
+                  echo "the base image's man-page NoExtract rule was not carried over" >&2; exit 1; }
+                grep -qE '^NoExtract.*etc/pacman\.conf' /etc/pacman.conf || {
+                  echo "the base image's etc/pacman.conf NoExtract rule was not carried over" >&2
+                  echo "without it a pacman upgrade can overwrite the file this candy writes" >&2
+                  exit 1; }

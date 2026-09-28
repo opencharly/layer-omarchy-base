@@ -1,6 +1,5 @@
 omarchy-base:
     candy:
-        version: 2026.242.0000
         description: |
             The Omarchy foundation — package sources, the Omarchy runtime, and a seeded home.
             omarchy-base is the meta every other Omarchy layer composes. It installs
@@ -25,11 +24,10 @@ omarchy-base:
                 - build
               exit_status: 0
               command: |
-                  set -eu
-                  test -f /usr/share/omarchy/version
-                  test -d /usr/share/omarchy/shell
-                  test -f "${HOME}/.config/hypr/hyprland.lua"
-
+                set -eu
+                test -f /usr/share/omarchy/version
+                test -d /usr/share/omarchy/shell
+                test -f "${HOME}/.config/hypr/hyprland.lua"
 omarchy-base-skill:
     skill:
         name: omarchy-base

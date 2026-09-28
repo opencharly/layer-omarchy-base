@@ -14,7 +14,6 @@
 #  FIRST `candy:` node in a manifest and drops the rest, so three candies in one
 #  charly.yml collapse to one named after the directory, and the other two resolve as
 #  `unknown candy`. Verified directly before this repo was authored.
-version: 2026.240.1943
 repo: github.com/opencharly/layer-omarchy-base
 discover:
     - path: candy

@@ -1,6 +1,5 @@
 omarchy-runtime:
     candy:
-        version: 2026.242.0000
         description: |
             The Omarchy runtime itself — the omarchy and omarchy-settings packages and the CLI tools they call.
             omarchy-runtime installs the two packages that ARE Omarchy: `omarchy` ships
@@ -62,7 +61,6 @@ omarchy-runtime:
               file:
                 file: /usr/share/omarchy/version
                 exists: true
-
             - check: the Quickshell desktop-shell tree ships with the omarchy package
               id: omarchy-runtime-shell-tree
               context:
@@ -70,7 +68,6 @@ omarchy-runtime:
               file:
                 file: /usr/share/omarchy/shell
                 exists: true
-
             - check: the bundled themes ship with the omarchy package
               id: omarchy-runtime-themes
               context:
@@ -81,7 +78,6 @@ omarchy-runtime:
               # would break.
               exit_status: 0
               command: sh -c 'test "$(ls -1 /usr/share/omarchy/themes | wc -l)" -ge 22'
-
             - check: the omarchy CLI is on PATH
               id: omarchy-runtime-cli
               context:
@@ -89,7 +85,6 @@ omarchy-runtime:
               file:
                 file: /usr/bin/omarchy
                 exists: true
-
             - check: omarchy-settings populated /etc/skel, the source omarchy-skel copies from
               id: omarchy-runtime-skel-populated
               context:
@@ -97,7 +92,6 @@ omarchy-runtime:
               file:
                 file: /etc/skel/.config/hypr/hyprland.lua
                 exists: true
-
             - check: the themed templates that render a theme into app configs are present
               id: omarchy-runtime-themed-templates
               context:
