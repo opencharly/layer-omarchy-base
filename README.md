@@ -1,11 +1,13 @@
-# layer-omarchy-base
+# omarchy-base
 
-The Omarchy foundation layer — the package sources every other `layer-omarchy-*`
-composes, the Omarchy runtime itself, and the `/etc/skel` seeding a charly image needs.
+The Omarchy foundation layer for charly images — the package sources every other
+`layer-omarchy-*` composes, the Omarchy runtime itself, and the `/etc/skel`
+seeding a charly image needs.
 
-[Omarchy](https://github.com/omacom/omarchy) is DHH's opinionated Linux distribution:
-vanilla Arch + Hyprland, with its own package repository and its own pinned snapshot of
-the Arch repositories.
+[Omarchy](https://github.com/omacom/omarchy) is DHH's opinionated Linux
+distribution: vanilla Arch + Hyprland, with its own package repository and its
+own pinned snapshot of the Arch repositories. This layer makes that distribution
+available inside a charly-built image.
 
 ## Using it
 
@@ -13,49 +15,24 @@ Pin **only the meta**, at its sub-path:
 
 ```yaml
 candy:
-    - '@github.com/opencharly/layer-omarchy-base/candy/omarchy-base:v<CalVer>'
+    - '@github.com/opencharly/layer-omarchy-base/candy/omarchy-base:v2026.242.0701'
 ```
 
-The meta names its members by bare sibling name, and `QualifyRemoteSiblingDeps` rewrites
-those to `.../candy/<member>` at this repo's own tag — so one pin pulls all three at a
-matching version. Members are never pinned from outside; they are always installed
-together.
+The meta names its members by bare sibling name, and `QualifyRemoteSiblingDeps`
+rewrites those to `.../candy/<member>` at this repo's own tag — so one pin pulls
+all three at a matching version. Members are never pinned from outside; they are
+always installed together.
 
 | Member | Installs | Effect |
 |---|---|---|
-| `omarchy-repo` | nothing | Repoints the mirror, adds `[omarchy]` + `[multilib]`, imports the key, keeps the limine hooks off the image |
+| `omarchy-repo` | nothing | Repoints pacman at Omarchy's pinned mirror, adds `[omarchy]` + `[multilib]`, imports the key, keeps the limine hooks off the image |
 | `omarchy-runtime` | `omarchy`, `omarchy-settings` + the CLI tools they call | The Omarchy package tree and the ~200 `omarchy-*` commands |
 | `omarchy-skel` | nothing | Copies `/etc/skel` into the image user's home |
 
-## Layout
+## Choosing a channel
 
-Members live in `candy/<name>/` subdirectories, **not** inline in one `charly.yml`. That
-is not a style choice: a candy's identity **is** its directory. `ParseCandyManifest`
-returns the *first* `candy:` node in a manifest and drops the rest, so three candies in
-one file collapse to one named after the directory and the other two resolve as
-`unknown candy`.
-
-## Three things worth knowing
-
-**The pacman configuration is a separate, package-less candy.** A candy's `plan:` steps
-are emitted *after* its `distro:` packages, so a single candy that both configured pacman
-and installed from it would configure too late. `omarchy-runtime` `require:`s
-`omarchy-repo` instead.
-
-**The mirror pin is load-bearing, and switching to it needs `-Syy`.** Omarchy publishes
-its own snapshot of the Arch repositories and installs against that. Measured 2026-08-29,
-`stable-mirror.omarchy.org` served `linux 7.1.9.arch1-2` while `geo.mirror.pkgbuild.com`
-was on `7.1.11.arch1-1`. 125 of the 148 base packages come from `core`/`extra`/`multilib`,
-so leaving the base image's Arch mirrorlist in place produces a *mixed* snapshot.
-
-The refresh must be forced. The base image ships a sync DB already populated from upstream
-Arch, and the snapshot's databases are deliberately *older* — `pacman -Sy` compares
-freshness, keeps the newer local DB, and the repoint silently has no effect. The build
-then resolves upstream versions and 404s fetching them from the snapshot. Observed
-exactly that: the DB offered `qt6-base 6.11.2-3` while the mirror serves `6.11.2-2`.
-
-Channel → mirror (upstream's own mapping; `edge` uses the *unprefixed* host, and there is
-no `dev` channel):
+`OMARCHY_CHANNEL` selects which Omarchy snapshot the image installs against:
+`stable` (the default), `edge`, or `rc`. There is no `dev` channel.
 
 | `OMARCHY_CHANNEL` | Arch repos | `[omarchy]` |
 |---|---|---|
@@ -63,43 +40,47 @@ no `dev` channel):
 | `edge` | `mirror.omarchy.org` | `pkgs.omarchy.org/edge` |
 | `rc` | `rc-mirror.omarchy.org` | `pkgs.omarchy.org/rc` |
 
-**An Omarchy image installs a bootloader it never uses.** `omarchy` hard-depends on
-`limine`, `limine-mkinitcpio-hook`, `limine-snapper-sync`, `snapper` and `sddm`, so a
-container gets the whole boot stack regardless. It is inert: the alpm hooks that would
-drive `limine-entry-tool` never land, and no unit is ever enabled.
+## Things worth knowing
 
-`limine-entry-tool` requires a genuinely mounted FAT32 ESP, which a container cannot
-have. `omarchy-repo` therefore adds five `NoExtract` rules to `/etc/pacman.conf` so the
-hook files are never written:
+**The mirror pin is load-bearing, and switching to it needs `-Syy`.** Omarchy
+publishes its own snapshot of the Arch repositories and installs against that.
+Measured 2026-08-29, `stable-mirror.omarchy.org` served `linux 7.1.9.arch1-2`
+while `geo.mirror.pkgbuild.com` was on `7.1.11.arch1-1`. Because 125 of the 148
+base packages come from `core`/`extra`/`multilib`, leaving the base image's Arch
+mirrorlist in place produces a *mixed* snapshot. The refresh must be forced
+(`-Syy`): the base image ships a sync DB already populated from upstream Arch,
+and the snapshot's databases are deliberately older, so a plain `-Sy` keeps the
+newer local DB and the repoint silently has no effect.
 
-```
-NoExtract = usr/share/libalpm/hooks/80-limine-efi-deploy.hook
-NoExtract = usr/share/libalpm/hooks/10-limine-snapper-lock.hook
-NoExtract = usr/share/libalpm/hooks/60-limine-mkinitcpio-remove-pre.hook
-NoExtract = usr/share/libalpm/hooks/90-limine-mkinitcpio-remove-post.hook
-NoExtract = etc/pacman.d/hooks/90-mkinitcpio-install.hook
-```
+**An Omarchy image installs a bootloader it never uses.** `omarchy` hard-depends
+on `limine`, `limine-mkinitcpio-hook`, `limine-snapper-sync`, `snapper` and
+`sddm`, so a container gets the whole boot stack regardless. It is inert — the
+alpm hooks that would drive `limine-entry-tool` are never extracted, and no unit
+is enabled. `omarchy-repo` adds five `NoExtract` rules to `/etc/pacman.conf` so
+the hook files are never written, because `limine-entry-tool` requires a
+genuinely mounted FAT32 ESP that a container cannot have.
 
-**Do not use `/etc/pacman.d/hooks/<name>` masking here.** It was tried first and is worse
-on three counts: it cannot cover `90-mkinitcpio-install.hook` at all (the package *owns*
-that path, so pre-creating it aborts the transaction with `conflicting files`); it leaves
-one unsilenceable failure behind, since no `ESP_PATH` value satisfies the FAT32 check; and
-that leftover is not cosmetic, because `charly check run` fails a build whose log carries
-failure lines even when podman exits 0.
+**charly vendors no Omarchy configuration.** `omarchy` and `omarchy-settings`
+ship everything — `/usr/share/omarchy/{bin,shell,themes,default,install,migrations}`
+and all of `/etc/skel`. There is no copy of `config/hypr/*.lua`, no `themes/`
+tree and no `default/themed/*.tpl` in this repo. `omarchy-skel` exists only
+because a charly image creates its user *before* candies run, so `useradd`'s
+`/etc/skel` copy has already happened.
 
-`ENABLE_HOOKS` inside `limine-entry-tool` is set by invocation mode, not by
-`/etc/limine-entry-tool.conf`, so there is no supported config switch. `NoExtract` is
-pacman's own mechanism for exactly this, and it yields a transaction that exits 0 with a
-completely clean log.
+## Layout
 
-## charly vendors no Omarchy configuration
+- `charly.yml` — repo shape: the `discover:` rule that finds the member candies.
+- `candy/omarchy-base/` — the meta candy + its `skill:` entity.
+- `candy/omarchy-repo/` — the pacman configuration candy.
+- `candy/omarchy-runtime/` — the `omarchy` + `omarchy-settings` candy.
+- `candy/omarchy-skel/` — the `/etc/skel` seeding candy.
+- `README.md` — this user overview.
 
-`omarchy` and `omarchy-settings` ship everything —
-`/usr/share/omarchy/{bin,shell,themes,default,install,migrations}` and all of `/etc/skel`.
-There is no copy of `config/hypr/*.lua`, no `themes/` tree and no `default/themed/*.tpl`
-in this repo. `omarchy-skel` exists only because a charly image creates its user *before*
-candies run, so `useradd`'s `/etc/skel` copy has already happened.
+## Related
 
-## License
-
-MIT — see [LICENSE](LICENSE).
+- Owning skill: `/charly-distros:omarchy-base` — the package sources, the
+  mirror-snapshot mechanics, the limine-hook `NoExtract` rules, and the
+  `/etc/skel` seeding.
+- Base image: `/charly-distros:omarchy`.
+- Derived layers: the sibling `opencharly/layer-omarchy-*` repos.
+- [`opencharly/opencharly`](https://github.com/opencharly/opencharly) — the umbrella.
