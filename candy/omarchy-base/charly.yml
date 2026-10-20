@@ -34,10 +34,3 @@ omarchy-base-skill:
         name: omarchy-base
         family: distros
         owner: omarchy-base
-        description: |-
-            The Omarchy foundation layer — the [omarchy] package sources, Omarchy's pinned
-            Arch mirror snapshot, the omarchy/omarchy-settings runtime, and the /etc/skel
-            seeding an image user needs.
-            MUST be invoked when working with: the omarchy-base meta or any of its
-            members, Omarchy package sources, the limine alpm hook NoExtract rules, or why an
-            Omarchy image installs a bootloader it never uses.
